@@ -18,35 +18,42 @@ app.get("/", (req, res) => {
 
 app.post("/download", async (req, res) => {
   try {
-    const { url, outputPath: downloadPath } = req.body;
-    console.log(url);
-    console.log(downloadPath);
+    const { url, outputPath: downloadPath, title: givenTitle } = req.body;
 
     if (!url) {
-      res.status(400).json({ message: "You must provide a valid url" });
-      return;
+      return res.status(400).json({ message: "You must provide a valid URL" });
     }
+
+    console.log("Received:", { url, givenTitle });
+    console.log(downloadPath);
+
+    let videoTitle = givenTitle;
+
+    // Only fetch metadata if no title was given - just link
+    if (!videoTitle) {
+      // Get video info like title
+
+      const rawMetadata = await ytdlp.execPromise([
+        url,
+        "--cookies",
+        "./cookies.txt",
+        "--dump-json",
+      ]);
+
+      const metadata = JSON.parse(rawMetadata);
+      videoTitle = metadata.title;
+    }
+    // Sanitize title
+    const safeTitle = videoTitle.replace(/[\\/:*?"<>|]/g, "").trim();
 
     // Call function that gets file size
     const videoSize = await getVideoSize(url);
     console.log(`Estimated Size: ${videoSize.toFixed(2)} MB`);
 
-    // Get video info like title
-    // const metadata = await ytdlp.getVideoInfo(url); // Assuming you have this function to get metadata
-    // console.log(metadata.title);
-    const rawMetadata = await ytdlp.execPromise([
-      url,
-      "--cookies",
-      "./cookies.txt",
-      "--dump-json",
-    ]);
-
-    const metadata = JSON.parse(rawMetadata);
-    console.log(metadata.title);
-
+    // if download Path is provided it will use that for output path, otherwise default
     const outputPath = downloadPath
       ? downloadPath
-      : `../videos/${metadata.title}.mp4`;
+      : `../videos/${safeTitle}.mp4`;
 
     // Spawn the yt-dlp process manually
     const ytDlpProcess = spawn("yt-dlp", [

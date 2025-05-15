@@ -17,6 +17,7 @@ export async function createClip(
   videoId,
   contextt
 ) {
+  console.log("here");
   try {
     console.log("creating clip");
     console.log("videoId:", videoId);

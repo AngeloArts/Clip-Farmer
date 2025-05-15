@@ -1,0 +1,795 @@
+From eaea1a907e603b3e6f0066625f911be2e8bcc9b6 Mon Sep 17 00:00:00 2001
+From: YellowScripter <120136171+AngeloArts@users.noreply.github.com>
+Date: Thu, 15 May 2025 17:41:27 +0300
+Subject: [PATCH] feat: enhance extension UI and backend clipping logic
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+### Extension Changes
+- Added 'Download', 'Mass Download', and 'Create Folder' buttons to popup
+- Styled popup.html for better layout and appearance
+- Created popup.js to handle button events
+- Added status div to display process updates in real time
+
+### Backend Changes
+- Added getActualVideoPath() to support multiple formats (.mp4, .mkv, .webm)
+- Changed video path argument in downloadVideo() from 'savePath' to 'fullVideoPath'
+- Renamed /mass-downloader endpoint to /mass-clipper for clarity
+- Improved download speed by using title from req.body if available
+
+### Fixes & Refactor
+- Fixed YouTube title bug: removed leading numbers and '- YouTube' using regex sanitizer
+- Fixed bug where only .mp4 inputs were recognized — now supports .mkv, .webm, etc.
+- Refactored ytdlp logic for cleaner input and improved speed with title hints
+- Centralized folder creation and sanitization logic for consistency
+---
+ .gitignore                            |   4 +
+ clipper/app.js                        |  83 ++++++++++++++--
+ timestamp yt/extension/background.js  | 124 +++++++++++++++++++++++-
+ timestamp yt/extension/content.js     |  51 +++++++---
+ timestamp yt/extension/index.html     |  59 +++++++++++-
+ timestamp yt/extension/popup.js       | 132 ++++++++++++++++++++++++++
+ timestamp yt/server/database/clips.js |   1 +
+ timestamp yt/server/database/video.js |  16 ++--
+ timestamp yt/server/server.js         |   6 +-
+ yt-dl/BACKEND/app2.js                 |  45 +++++----
+ yt-dl/BACKEND/cookies.txt             |  14 +--
+ 11 files changed, 478 insertions(+), 57 deletions(-)
+ create mode 100644 timestamp yt/extension/popup.js
+
+diff --git a/.gitignore b/.gitignore
+index 86df57c..25c7486 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -12,6 +12,10 @@
+ clipper/clips/
+ yt-dl/videos/
+ 
++#Ignore cookies.txt files
++**/cookies.txt
++
++
+ # Optional: ignore all video formats just in case
+ *.mp4
+ *.webm
+diff --git a/clipper/app.js b/clipper/app.js
+index 3a0e017..62ca21b 100644
+--- a/clipper/app.js
++++ b/clipper/app.js
+@@ -11,9 +11,21 @@ const PORT = 3000;
+ 
+ app.use(express.json());
+ 
++//options
++const sealMode = false;
++
+ // Tracks videos that are currently being downloaded
+ const downloadingVideos = new Set();
+ 
++// helper to get the acutal Video Path
++function getActualVideoPath(folderPath, baseName) {
++  const files = fs.readdirSync(folderPath);
++  const match = files.find(
++    (file) => file.startsWith(baseName) && /\.(mp4|mkv|webm)$/i.test(file)
++  );
++  return match ? path.join(folderPath, match) : null;
++}
++
+ // Helper: ensure a folder exists
+ function ensureFolderExists(folderPath) {
+   if (!fs.existsSync(folderPath)) {
+@@ -23,14 +35,15 @@ function ensureFolderExists(folderPath) {
+ }
+ 
+ // Helper: download a video if it's not already being downloaded
+-async function downloadVideo(videoTitle, videoUrl, savePath) {
++async function downloadVideo(videoTitle, videoUrl, fullVideoPath) {
+   if (downloadingVideos.has(videoTitle)) {
+     console.log(`"${videoTitle}" is already being downloaded.`);
+     return;
+   }
+ 
+-  if (fs.existsSync(savePath)) {
+-    console.log(`"${videoTitle}" already exists.`);
++  // Inside your downloadVideo function
++  if (fs.existsSync(fullVideoPath)) {
++    console.log(`${videoTitle} already exists.`);
+     return;
+   }
+ 
+@@ -125,6 +138,15 @@ app.post("/clip", async (req, res) => {
+ 
+   try {
+     ensureFolderExists(folderPath);
++    // seal mode after creating the folder for the video and clips
++    // if (sealMode) {
++    //   res.status(200).json({
++    //     message:
++    //       `Seal Mode is activated, ${folderPath} has been created, paste the video`,
++    //   });
++    //   return;
++    // }
++    // download the video if seal mode is off/manual mode
+     await downloadVideo(safeTitle, videoUrl, fullVideoPath);
+ 
+     if (!fs.existsSync(fullVideoPath)) {
+@@ -138,8 +160,10 @@ app.post("/clip", async (req, res) => {
+   }
+ });
+ 
+-app.post("/mass-download", async (req, res) => {
++// Route or endpoint with controller for clipping multiple clips for a specific YoutubeUrl
++app.post("/mass-clipper", async (req, res) => {
+   const { videoUrl, onlyClipped = false } = req.body;
++  console.log(videoUrl);
+ 
+   if (!videoUrl) {
+     return res.status(400).json({ error: "Missing videoUrl" });
+@@ -152,15 +176,21 @@ app.post("/mass-download", async (req, res) => {
+ 
+     const safeTitle = sanitize(video.title);
+     const folderPath = path.join(__dirname, "clips", safeTitle);
+-    const fullVideoPath = path.join(folderPath, `${safeTitle}.mp4`);
++    // const fullVideoPath = path.join(folderPath, `${safeTitle}.mp4`);
++    const fullVideoPath = getActualVideoPath(folderPath, safeTitle);
++    // even this one below is kinda redundant because donwloadVideo already checks if the video exists
++    if (!fullVideoPath) {
++      return res.status(404).json({ error: "Video not found after download." });
++    }
+ 
+     // 2. Download the full video
+     ensureFolderExists(folderPath);
+     await downloadVideo(safeTitle, videoUrl, fullVideoPath);
+ 
+-    if (!fs.existsSync(fullVideoPath)) {
+-      return res.status(404).json({ error: "Video file not ready yet" });
+-    }
++    // commented out because downloadVideo already checks if the video exists
++    // if (!fs.existsSync(fullVideoPath)) {
++    //   return res.status(404).json({ error: "Video file not ready yet" });
++    // }
+ 
+     // 3. Fetch clips from DB
+     const allClips = await getClips(video.id);
+@@ -186,6 +216,8 @@ app.post("/mass-download", async (req, res) => {
+       await pool.query("UPDATE clips SET clipped = 1 WHERE id = ?", [id]);
+     }
+ 
++    console.log(`All clips processed for ${video.title}`);
++
+     res.status(200).json({ message: `All clips processed for ${video.title}` });
+   } catch (err) {
+     console.error("Mass download error:", err);
+@@ -193,6 +225,41 @@ app.post("/mass-download", async (req, res) => {
+   }
+ });
+ 
++// Handles request to make a folder for the youtube Video
++// then you manually paste video there o use the download video button
++app.post("/folder", (req, res) => {
++  const { videoTitle } = req.body;
++  if (!videoTitle) {
++    return res.status(400).json({ error: "Missing 'title' in request body" });
++  }
++  console.log(videoTitle);
++
++  // Removes the number at the beginning(notfication count or whatever) plus the - Youtube part at the end
++  let cleanedTitle = videoTitle
++    .replace(/^\(\d+\)\s*/, "")
++    .replace(" - YouTube", "");
++
++  if (!videoTitle) {
++    return res.status(400).json({ error: "Missing videoTitle" });
++  }
++
++  const safeTitle = sanitize(videoTitle);
++  const folderPath = path.join(__dirname, "clips", safeTitle);
++
++  if (fs.existsSync(folderPath)) {
++    console.log(`Folder already exists for "${safeTitle}"`);
++    return res.status(200).json({
++      message: `Folder already exists: ${folderPath}. You can now paste the video.`,
++    });
++  }
++
++  ensureFolderExists(folderPath);
++  console.log(`Folder created for "${safeTitle}"`);
++  res.status(201).json({
++    message: `Folder created: ${folderPath}. You can now paste the video manually.`,
++  });
++});
++
+ app.listen(PORT, () => {
+   console.log(`Clipper API listening on http://localhost:${PORT}`);
+ });
+diff --git a/timestamp yt/extension/background.js b/timestamp yt/extension/background.js
+index 07b7346..1d2493e 100644
+--- a/timestamp yt/extension/background.js	
++++ b/timestamp yt/extension/background.js	
+@@ -4,6 +4,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+     const { title, startingTime, endingTime, youtubeUrl, contextt } =
+       message.payload;
+     console.log("starting time background", startingTime);
++    console.log(title);
+ 
+     fetch("http://localhost:3001/clips", {
+       method: "POST",
+@@ -14,7 +15,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+         title,
+         startingTime,
+         endingTime,
+-        content,
+         youtubeUrl,
+         contextt,
+       }),
+@@ -25,4 +25,126 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+ 
+     return true; // <- THIS is crucial to keep sendResponse alive
+   }
++
++  if (message.action === "createFolder") {
++    const { title } = message;
++    console.log("Creating folder for title:", title);
++
++    fetch("http://localhost:3000/folder", {
++      method: "POST",
++      headers: {
++        "Content-Type": "application/json",
++      },
++      body: JSON.stringify({ videoTitle: title }),
++    })
++      .then((response) => response.json())
++      .then((data) => {
++        console.log("Folder created:", data);
++
++        // ✅ Send message to the current active tab (YouTube page) - remove if you don't want
++        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
++          if (tabs.length > 0) {
++            chrome.tabs.sendMessage(tabs[0].id, {
++              action: "logMessage",
++              message: `✅ Folder created for "${title}"`,
++            });
++          }
++        });
++
++        // Optional response to popup (not necessary if you don't use it)
++        sendResponse({ status: "ok" });
++      })
++      .catch((error) => {
++        console.error("Fetch error:", error);
++        sendResponse({ status: "error" });
++      });
++
++    return true; // Required to keep sendResponse alive
++  }
++
++  // Added mass downloader and it sends back message to broswer dev console
++  if (message.action === "massDownload") {
++    const { youtubeUrl, title } = message.payload;
++
++    console.log(`Starting mass download for: ${title} (${youtubeUrl})`);
++
++    fetch("http://localhost:3000/mass-download", {
++      method: "POST",
++      headers: {
++        "Content-Type": "application/json",
++      },
++      body: JSON.stringify({ videoUrl: youtubeUrl, title }),
++    })
++      .then((response) => response.json())
++      .then((data) => {
++        // log to service worker
++        console.log(`✅ Finished clipping all clips for: ${title}`);
++        console.log(data);
++        // Send to content script (YouTube tab)
++        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
++          if (tabs.length > 0) {
++            chrome.tabs.sendMessage(tabs[0].id, {
++              action: "logMessage",
++              message: `✅ Finished clipping all clips for"${title}"`,
++            });
++          }
++        });
++
++        // Send to popup (only if open)
++        chrome.runtime.sendMessage({
++          action: "logMessage",
++          message: `✅ Finished clipping all for video: "${title}"`,
++        });
++      })
++      .catch((error) => console.error("Mass download error:", error));
++
++    return true;
++  }
++
++  // Added video downloader
++  if (message.action === "downloadVideo") {
++    const { youtubeUrl, title } = message.payload;
++    console.log(`Starting download for: ${title} (${youtubeUrl})`);
++
++    fetch("http://localhost:5000/download", {
++      method: "POST",
++      headers: {
++        "Content-Type": "application/json",
++      },
++      body: JSON.stringify({
++        url: youtubeUrl,
++        title,
++      }),
++    })
++      .then((res) => res.json())
++      .then((data) => {
++        // log to service worker
++        console.log(`✅ Finished downloading video: ${title}`);
++        console.log(data);
++        // Send to content script (YouTube tab)
++        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
++          if (tabs.length > 0) {
++            chrome.tabs.sendMessage(tabs[0].id, {
++              action: "logMessage",
++              message: `✅ Finished downloading the video"${title}"`,
++            });
++          }
++        });
++
++        // Send to popup (only if open)
++        chrome.runtime.sendMessage({
++          action: "logMessage",
++          message: `✅ Finished downloading "${title}"`,
++        });
++
++        sendResponse({ success: true, data });
++      })
++      .catch((error) => {
++        console.error("Download failed:", error);
++        sendResponse({ success: false, error });
++      });
++
++    // Required for asynchronous response
++    return true;
++  }
+ });
+diff --git a/timestamp yt/extension/content.js b/timestamp yt/extension/content.js
+index 5703376..1fbc795 100644
+--- a/timestamp yt/extension/content.js	
++++ b/timestamp yt/extension/content.js	
+@@ -65,22 +65,32 @@ async function handleEndClick() {
+   const video = document.querySelector("video");
+   endTime = parseFloat(video?.currentTime || 0);
+ 
+-  const title = document.title;
++  // Removes the number at the beginning(notification count or whatever) plus the - Youtube part at the end
++  let rawTitle = document.title;
++  let cleanedTitle = rawTitle
++    .replace(/^\(\d+\)\s*/, "")
++    .replace(" - YouTube", "");
++
+   const videoId = new URLSearchParams(location.search).get("v");
+   const url = location.href;
+ 
+   const contextt = await window.prompt();
+-
+-  chrome.runtime.sendMessage({
+-    action: "saveTimeStamp",
+-    payload: {
+-      title,
+-      startingTime: startTime,
+-      endingTime: endTime,
+-      youtubeUrl: url,
+-      contextt,
+-    },
+-  });
++  console.log(cleanedTitle);
++
++  try {
++    chrome.runtime.sendMessage({
++      action: "saveTimeStamp",
++      payload: {
++        title: cleanedTitle,
++        startingTime: startTime,
++        endingTime: endTime,
++        youtubeUrl: url,
++        contextt,
++      },
++    });
++  } catch (error) {
++    console.log(error);
++  }
+ 
+   console.log("End Time:", endTime);
+   resetTimestamps();
+@@ -112,6 +122,13 @@ function injectButtonStyles() {
+   document.head.appendChild(style);
+ }
+ 
++// this is for creating folder button and other processes that finish, they will emit logMessasge
++chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
++  if (message.action === "logMessage") {
++    console.log("YouTube Tab Log:", message.message); // ✅ YouTube tab only - ✅ Will show in tab’s DevTools console
++  }
++});
++
+ // MutationObserver to insert buttons
+ const observer = new MutationObserver(() => {
+   addTimestampButtons();
+@@ -121,3 +138,13 @@ observer.observe(document.body, {
+   childList: true,
+   subtree: true,
+ });
++
++// let lastUrl = location.href;
++// new MutationObserver(() => {
++//   const currentUrl = location.href;
++//   if (currentUrl !== lastUrl) {
++//     lastUrl = currentUrl;
++//     console.log("URL changed:", currentUrl);
++//     addTimestampButtons(); // Re-run your init logic
++//   }
++// }).observe(document, { subtree: true, childList: true });
+diff --git a/timestamp yt/extension/index.html b/timestamp yt/extension/index.html
+index f6634d2..417b269 100644
+--- a/timestamp yt/extension/index.html	
++++ b/timestamp yt/extension/index.html	
+@@ -3,9 +3,64 @@
+   <head>
+     <meta charset="UTF-8" />
+     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+-    <title>FARM CLIPPER</title>
++    <title>Farm Clipper</title>
++    <style>
++      body {
++        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
++        padding: 20px;
++        margin: 0;
++        background-color: #f9fafb;
++        color: #111;
++        width: 250px;
++      }
++
++      h1 {
++        font-size: 18px;
++        margin-bottom: 20px;
++        color: #2c3e50;
++      }
++
++      .button-group {
++        display: flex;
++        flex-direction: column;
++        gap: 10px;
++      }
++
++      button {
++        background-color: #1e88e5;
++        border: none;
++        color: white;
++        padding: 12px;
++        font-size: 14px;
++        border-radius: 6px;
++        cursor: pointer;
++        transition: background-color 0.3s ease;
++      }
++
++      button:hover {
++        background-color: #1565c0;
++      }
++
++      button:active {
++        background-color: #0d47a1;
++      }
++
++      .message {
++        margin-top: 15px;
++        font-size: 13px;
++        color: #444;
++      }
++    </style>
+   </head>
+   <body>
+-    <div>CLIPPER</div>
++    <h1>FARM CLIPPER</h1>
++    <div class="button-group">
++      <button id="folder">📁 Create Folder</button>
++      <button id="massDownload">📥 Mass Download</button>
++      <button id="downloadBtn">Download Video</button>
++    </div>
++    <div class="message" id="statusMessage"></div>
++
++    <script src="popup.js"></script>
+   </body>
+ </html>
+diff --git a/timestamp yt/extension/popup.js b/timestamp yt/extension/popup.js
+new file mode 100644
+index 0000000..ae2022d
+--- /dev/null
++++ b/timestamp yt/extension/popup.js	
+@@ -0,0 +1,132 @@
++document.getElementById("folder").addEventListener("click", () => {
++  async function sendVideoTitle() {
++    let [tab] = await chrome.tabs.query({ active: true });
++
++    const [{ result: cleanedTitle }] = await chrome.scripting.executeScript({
++      target: { tabId: tab.id },
++      func: () => {
++        const title = document.title;
++        return title.replace(/^\(\d+\)\s*/, "").replace(" - YouTube", "");
++      },
++    });
++
++    // Now send the message from the extension context (popup)
++    chrome.runtime.sendMessage({
++      action: "createFolder",
++      title: cleanedTitle,
++    });
++  }
++
++  sendVideoTitle();
++});
++
++document.getElementById("massDownload").addEventListener("click", () => {
++  async function sendMassDownloadRequest() {
++    let [tab] = await chrome.tabs.query({ active: true });
++
++    const [{ result: pageInfo }] = await chrome.scripting.executeScript({
++      target: { tabId: tab.id },
++      func: () => {
++        const title = document.title
++          .replace(/^\(\d+\)\s*/, "")
++          .replace(" - YouTube", "");
++        const url = window.location.href;
++        return { title, url };
++      },
++    });
++
++    chrome.runtime.sendMessage({
++      action: "massDownload",
++      payload: {
++        title: pageInfo.title,
++        youtubeUrl: pageInfo.url,
++      },
++    });
++  }
++
++  sendMassDownloadRequest();
++});
++
++document.getElementById("downloadBtn").addEventListener("click", async () => {
++  async function downloadVideo() {
++    let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
++    if (!tab || !tab.url || !tab.url.startsWith("http")) {
++      console.error("Tab URL is not accessible or invalid:", tab);
++      return;
++    }
++
++    const [{ result: pageInfo }] = await chrome.scripting.executeScript({
++      target: { tabId: tab.id },
++      func: () => {
++        const title = document.title
++          .replace(/^\(\d+\)\s*/, "")
++          .replace(" - YouTube", "");
++        const url = window.location.href;
++        return { title, url };
++      },
++    });
++
++    chrome.runtime.sendMessage({
++      action: "downloadVideo",
++      payload: {
++        title: pageInfo.title,
++        youtubeUrl: pageInfo.url,
++      },
++    });
++
++    document.getElementById("statusMessage").textContent =
++      "⏳ Sending download request... ";
++  }
++
++  downloadVideo();
++});
++
++chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
++  if (message.action === "logMessage") {
++    const status = document.getElementById("statusMessage");
++    if (status) {
++      status.textContent = message.message;
++    }
++  }
++});
++
++// document.getElementById("massDownload").addEventListener("click", async () => {
++//   let [tab] = await chrome.tabs.query({ active: true });
++
++//   const youtubeUrl = tab.url;
++
++//   chrome.runtime.sendMessage({
++//     action: "massDownload",
++//     youtubeUrl,
++//   });
++// });
++
++// This did not work that is why it is commented - apparently you cant use chrome.runtime.sendMessage inside the function
++
++// document.getElementById("folder").addEventListener("click", () => {
++//   async function sendVideoTitle() {
++//     let [tab] = await chrome.tabs.query({ active: true });
++//     chrome.scripting.executeScript({
++//       target: { tabId: tab.id },
++//       func: () => {
++//         const title = document.title; // Get the current page title
++
++//         // Removes the number at the beginning(notification count or whatever) plus the - Youtube part at the end
++
++//         let cleanedTitle = title
++//           .replace(/^\(\d+\)\s*/, "")
++//           .replace(" - YouTube", "");
++
++//         console.log(cleanedTitle);
++
++//         // Send message to background.js to create a folder
++//         chrome.runtime.sendMessage({
++//           action: "createFolder",
++//           title: cleanedTitle,
++//         });
++//       },
++//     });
++//   }
++
++//   sendVideoTitle();
++// });
+diff --git a/timestamp yt/server/database/clips.js b/timestamp yt/server/database/clips.js
+index 25260aa..43251ee 100644
+--- a/timestamp yt/server/database/clips.js	
++++ b/timestamp yt/server/database/clips.js	
+@@ -17,6 +17,7 @@ export async function createClip(
+   videoId,
+   contextt
+ ) {
++  console.log("here");
+   try {
+     console.log("creating clip");
+     console.log("videoId:", videoId);
+diff --git a/timestamp yt/server/database/video.js b/timestamp yt/server/database/video.js
+index 9b80363..1397cb9 100644
+--- a/timestamp yt/server/database/video.js	
++++ b/timestamp yt/server/database/video.js	
+@@ -1,12 +1,16 @@
+ import { pool } from "./index.js";
+ 
+ export async function createVideo(title, youtubeUrl, folderName) {
+-  const [createdVideo] = await pool.query(
+-    "INSERT IGNORE INTO videos (title, youtube_url, folder_name) VALUES (?, ?, ?)",
+-    [title, youtubeUrl, folderName]
+-  );
+-  console.log(createdVideo);
+-  return await getVideoId(youtubeUrl);
++  try {
++    const [createdVideo] = await pool.query(
++      "INSERT IGNORE INTO videos (title, youtube_url, folder_name) VALUES (?, ?, ?)",
++      [title, youtubeUrl, folderName]
++    );
++    console.log(createdVideo);
++    return await getVideoId(youtubeUrl);
++  } catch (error) {
++    console.log(error);
++  }
+ }
+ 
+ // get video Id by using the link, returns the number
+diff --git a/timestamp yt/server/server.js b/timestamp yt/server/server.js
+index d37f79e..112ee9d 100644
+--- a/timestamp yt/server/server.js	
++++ b/timestamp yt/server/server.js	
+@@ -41,11 +41,13 @@ app.post("/clips", async (req, res) => {
+   const { title, startingTime, endingTime, youtubeUrl, contextt } = req.body;
+   console.log("from our server last");
+   console.log(startingTime);
+-
++  console.log(title);
+   // cleans up the folder Name before passing it to the db (the title cleaned up basically)
+   const safeFolderName = generateFolderName(title);
+   // create the video in database
+-  const videoId = await createVideo(youtubeUrl, title, safeFolderName);
++  const videoId = await createVideo(title, youtubeUrl, safeFolderName);
++
++  console.log("tst");
+ 
+   const createdClip = await createClip(
+     title,
+diff --git a/yt-dl/BACKEND/app2.js b/yt-dl/BACKEND/app2.js
+index 22fa3c3..d8cd870 100644
+--- a/yt-dl/BACKEND/app2.js
++++ b/yt-dl/BACKEND/app2.js
+@@ -18,35 +18,42 @@ app.get("/", (req, res) => {
+ 
+ app.post("/download", async (req, res) => {
+   try {
+-    const { url, outputPath: downloadPath } = req.body;
+-    console.log(url);
+-    console.log(downloadPath);
++    const { url, outputPath: downloadPath, title: givenTitle } = req.body;
+ 
+     if (!url) {
+-      res.status(400).json({ message: "You must provide a valid url" });
+-      return;
++      return res.status(400).json({ message: "You must provide a valid URL" });
++    }
++
++    console.log("Received:", { url, givenTitle });
++    console.log(downloadPath);
++
++    let videoTitle = givenTitle;
++
++    // Only fetch metadata if no title was given - just link
++    if (!videoTitle) {
++      // Get video info like title
++
++      const rawMetadata = await ytdlp.execPromise([
++        url,
++        "--cookies",
++        "./cookies.txt",
++        "--dump-json",
++      ]);
++
++      const metadata = JSON.parse(rawMetadata);
++      videoTitle = metadata.title;
+     }
++    // Sanitize title
++    const safeTitle = videoTitle.replace(/[\\/:*?"<>|]/g, "").trim();
+ 
+     // Call function that gets file size
+     const videoSize = await getVideoSize(url);
+     console.log(`Estimated Size: ${videoSize.toFixed(2)} MB`);
+ 
+-    // Get video info like title
+-    // const metadata = await ytdlp.getVideoInfo(url); // Assuming you have this function to get metadata
+-    // console.log(metadata.title);
+-    const rawMetadata = await ytdlp.execPromise([
+-      url,
+-      "--cookies",
+-      "./cookies.txt",
+-      "--dump-json",
+-    ]);
+-
+-    const metadata = JSON.parse(rawMetadata);
+-    console.log(metadata.title);
+-
++    // if download Path is provided it will use that for output path, otherwise default
+     const outputPath = downloadPath
+       ? downloadPath
+-      : `../videos/${metadata.title}.mp4`;
++      : `../videos/${safeTitle}.mp4`;
+ 
+     // Spawn the yt-dlp process manually
+     const ytDlpProcess = spawn("yt-dlp", [
+diff --git a/yt-dl/BACKEND/cookies.txt b/yt-dl/BACKEND/cookies.txt
+index 82b4b13..cb157fb 100644
+--- a/yt-dl/BACKEND/cookies.txt
++++ b/yt-dl/BACKEND/cookies.txt
+@@ -1,17 +1,17 @@
+ # Netscape HTTP Cookie File
+ # This file is generated by yt-dlp.  Do not edit.
+ 
+-.youtube.com	TRUE	/	TRUE	1760795146	DEVICE_INFO	ChxOelE1TWprMU5EQTBNRGs1TkRJek16UXpPQT09EIqYmcAGGICk8b8G
+-.youtube.com	TRUE	/	TRUE	1745244533	GPS	1
++.youtube.com	TRUE	/	TRUE	1762798134	DEVICE_INFO	ChxOelE1TWprMU5EQTBNRGs1TkRJek16UXpPQT09ELa4k8EGGICk8b8G
++.youtube.com	TRUE	/	TRUE	1747247918	GPS	1
+ .youtube.com	TRUE	/	FALSE	0	PREF	tz=UTC&f4=4000000&f5=30000&f6=40000000&f7=140&hl=en
+-.youtube.com	TRUE	/	TRUE	1760795146	VISITOR_INFO1_LIVE	lJzqGpRvgCU
+-.youtube.com	TRUE	/	TRUE	1760795146	VISITOR_PRIVACY_METADATA	CgJHQhIEGgAgDA%3D%3D
+-.youtube.com	TRUE	/	TRUE	0	YSC	Y9EMQgupttw
++.youtube.com	TRUE	/	TRUE	1762798134	VISITOR_INFO1_LIVE	lJzqGpRvgCU
++.youtube.com	TRUE	/	TRUE	1762798134	VISITOR_PRIVACY_METADATA	CgJHQhIEGgAgDA%3D%3D
++.youtube.com	TRUE	/	TRUE	0	YSC	L0em5Twc7cA
+ .youtube.com	TRUE	/	TRUE	1776124571	__Secure-1PSIDTS	sidts-CjIB7pHptd1ywKCoBSUbI2H5GmarCyzyPqHV62YE8Rezlgn2-573jsvZp6_FhDWWR38U5RAA
+ .youtube.com	TRUE	/	TRUE	1778503415	__Secure-3PAPISID	tcCk5v6cBWbP9X0l/APweiWyyTjc6DxUZJ
+ .youtube.com	TRUE	/	TRUE	1778503415	__Secure-3PSID	g.a000vgjbzvgG7vwaEKqVBMpaPVcAnM1kF1AaovDIvTw18l9vSrwQgjCxy5yGNHmAw_IwJhsj4AACgYKAZQSARESFQHGX2Mi-gwVF0YlT6GXw8Gq3eRmSRoVAUF8yKoa7uhvyZV3AjS10_v8qLgi0076
+ .youtube.com	TRUE	/	TRUE	1776127249	__Secure-3PSIDCC	AKEyXzWknBVvvyvCfFTpe0S9LY4aNXiRAIs1YXsVIxwx1WgOnW4HnEGf7dj68_K-ZlGArd-yYY8
+ .youtube.com	TRUE	/	TRUE	1776124571	__Secure-3PSIDTS	sidts-CjIB7pHptd1ywKCoBSUbI2H5GmarCyzyPqHV62YE8Rezlgn2-573jsvZp6_FhDWWR38U5RAA
+-.youtube.com	TRUE	/	TRUE	1760794733	__Secure-ROLLOUT_TOKEN	CNCqgJKmzMfGExDdnI7u8raKAxionLvpn-mMAw%3D%3D
++.youtube.com	TRUE	/	TRUE	1762798118	__Secure-ROLLOUT_TOKEN	CNCqgJKmzMfGExDdnI7u8raKAxj9q4KCx6ONAw%3D%3D
+ .youtube.com	TRUE	/	TRUE	1778717078	__Secure-YEC	CgtFMUR5QUN1YnhKcyj_o_G_BjIKCgJHQhIEGgAgWw%3D%3D
+-.youtube.com	TRUE	/	TRUE	1808315146	__Secure-YT_TVFAS	t=484608&s=3
++.youtube.com	TRUE	/	TRUE	1810318134	__Secure-YT_TVFAS	t=484608&s=3
+-- 
+2.47.1.windows.1
+

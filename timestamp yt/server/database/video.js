@@ -1,12 +1,16 @@
 import { pool } from "./index.js";
 
 export async function createVideo(title, youtubeUrl, folderName) {
-  const [createdVideo] = await pool.query(
-    "INSERT IGNORE INTO videos (title, youtube_url, folder_name) VALUES (?, ?, ?)",
-    [title, youtubeUrl, folderName]
-  );
-  console.log(createdVideo);
-  return await getVideoId(youtubeUrl);
+  try {
+    const [createdVideo] = await pool.query(
+      "INSERT IGNORE INTO videos (title, youtube_url, folder_name) VALUES (?, ?, ?)",
+      [title, youtubeUrl, folderName]
+    );
+    console.log(createdVideo);
+    return await getVideoId(youtubeUrl);
+  } catch (error) {
+    console.log(error);
+  }
 }
 
 // get video Id by using the link, returns the number

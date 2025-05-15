@@ -15,6 +15,10 @@
 clipper/clips/
 yt-dl/videos/
 
+#Ignore cookies.txt files
+**/cookies.txt
+
+
 # Optional: ignore all video formats just in case
 *.mp4
 *.webm

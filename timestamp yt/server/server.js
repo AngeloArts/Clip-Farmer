@@ -41,11 +41,13 @@ app.post("/clips", async (req, res) => {
   const { title, startingTime, endingTime, youtubeUrl, contextt } = req.body;
   console.log("from our server last");
   console.log(startingTime);
-
+  console.log(title);
   // cleans up the folder Name before passing it to the db (the title cleaned up basically)
   const safeFolderName = generateFolderName(title);
   // create the video in database
-  const videoId = await createVideo(youtubeUrl, title, safeFolderName);
+  const videoId = await createVideo(title, youtubeUrl, safeFolderName);
+
+  console.log("tst");
 
   const createdClip = await createClip(
     title,
