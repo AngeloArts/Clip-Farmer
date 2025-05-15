@@ -1,0 +1,66 @@
+.form {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background-color: lightblue;
+  height: 100px;
+
+  border-top-left-radius: 18px;
+  border-top-right-radius: 18px;
+}
+
+.middle {
+  border-style: solid;
+  border-width: 3px;
+  border-radius: 20px;
+  display: flex;
+  flex-direction: column;
+
+  padding: 0px;
+}
+
+.link-input {
+  border-radius: 30px;
+  flex: 1;
+  max-width: 700px;
+  height: 30px;
+
+  font-size: 20px;
+  padding-left: 10px;
+
+  border-style: solid;
+}
+
+.metadata {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.download-button {
+  height: 30px;
+  border-style: solid;
+  border-color: grey;
+  border-radius: 20px;
+
+  padding-right: 10px;
+  padding-left: 10px;
+}
+
+.downloading {
+  display: flex;
+  justify-content: center;
+  background-color: rgb(97, 193, 121);
+}
+.asleep {
+  display: flex;
+  justify-content: center;
+  background-color: aliceblue;
+}
+
+.final-message {
+  display: flex;
+  justify-content: center;
+  background-color: rgb(157, 157, 157);
+  color: green;
+}

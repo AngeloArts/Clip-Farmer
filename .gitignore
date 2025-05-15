@@ -1,0 +1,25 @@
+# Ignore all node_modules anywhere
+**/node_modules/
+
+# Ignore all cookies.txt
+**/cookies.txt
+
+# Ignore all build outputs
+**/dist/
+**/build/
+
+# Ignore all log files
+*.log
+
+# Ignore videos and clips folders
+clipper/clips/
+yt-dl/videos/
+
+# Optional: ignore all video formats just in case
+*.mp4
+*.webm
+*.mov
+
+# OS-specific junk
+.DS_Store
+Thumbs.db
